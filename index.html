@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoData Argentina - Dashboard Ambiental</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Prop-Types (Dependencia requerida por Recharts UMD) -->
+    <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+
+    <!-- Recharts (Gráficos) - Versión Específica Estable -->
+    <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+    
+    <!-- Leaflet (Mapas) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; }
+        .map-container { height: 400px; width: 100%; border-radius: 0.5rem; z-index: 0; }
+        /* Custom scrollbar for tables */
+        .custom-scroll::-webkit-scrollbar { width: 8px; }
+        .custom-scroll::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background: #555; }
+        
+        .animate-fade-in { animation: fadeIn 0.5s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        .glass-card { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // --- SUPRESIÓN DE ADVERTENCIAS DE LIBRERÍAS EXTERNAS ---
+        const originalConsoleError = console.error;
+        console.error = (...args) => {
+            if (typeof args[0] === 'string' && /defaultProps/.test(args[0])) {
+                return;
+            }
+            originalConsoleError(...args);
+        };
+
+        const { useState, useEffect, useRef } = React;
+        
+        const { 
+            PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar 
+        } = window.Recharts;
+
+        // --- DATOS SIMULADOS (MOCKS) ---
+        const ENERGY_DATA = [
+            { name: 'Térmica', value: 45, color: '#EF4444' }, 
+            { name: 'Hidráulica', value: 25, color: '#3B82F6' },
+            { name: 'Renovable (Eol/Sol)', value: 18, color: '#10B981' },
+            { name: 'Nuclear', value: 8, color: '#8B5CF6' },
+            { name: 'Otras', value: 4, color: '#9CA3AF' },
+        ];
+
+        const RENEWABLE_HISTORY = [
+            { year: '2019', Solar: 1000, Eolica: 3000 },
+            { year: '2020', Solar: 1500, Eolica: 4500 },
+            { year: '2021', Solar: 2200, Eolica: 6000 },
+            { year: '2022', Solar: 3500, Eolica: 7800 },
+            { year: '2023', Solar: 4800, Eolica: 9500 },
+        ];
+
+        // NUEVO: Ubicaciones de principales centrales energéticas
+        const ENERGY_SITES = [
+            { lat: -27.48, lng: -56.73, type: 'Hidroeléctrica', name: 'Yacyretá', color: '#3B82F6' },
+            { lat: -31.27, lng: -57.95, type: 'Hidroeléctrica', name: 'Salto Grande', color: '#3B82F6' },
+            { lat: -33.96, lng: -59.20, type: 'Nuclear', name: 'Atucha I y II', color: '#8B5CF6' },
+            { lat: -32.23, lng: -64.44, type: 'Nuclear', name: 'Central Embalse', color: '#8B5CF6' },
+            { lat: -24.08, lng: -66.70, type: 'Solar', name: 'Cauchari (Jujuy)', color: '#F59E0B' },
+            { lat: -30.10, lng: -67.80, type: 'Solar', name: 'Parque San Juan', color: '#F59E0B' },
+            { lat: -43.58, lng: -67.28, type: 'Eólica', name: 'P.E. Chubut Norte', color: '#10B981' },
+            { lat: -28.69, lng: -66.75, type: 'Eólica', name: 'P.E. Arauco', color: '#10B981' },
+            { lat: -38.90, lng: -68.10, type: 'Térmica', name: 'Alto Valle', color: '#EF4444' },
+            { lat: -34.58, lng: -58.37, type: 'Térmica', name: 'Central Puerto', color: '#EF4444' }
+        ];
+
+        const PROVINCIAL_ENV_DATA = [
+            { prov: 'Buenos Aires', aire_pm25: 18, aire_calidad: 'Moderada', agua_acceso: 78, agua_estado: 'Crítico (Cuencas)' },
+            { prov: 'CABA', aire_pm25: 12, aire_calidad: 'Buena', agua_acceso: 99, agua_estado: 'Bueno' },
+            { prov: 'Córdoba', aire_pm25: 15, aire_calidad: 'Moderada', agua_acceso: 85, agua_estado: 'Alerta (Sequía)' },
+            { prov: 'Santa Fe', aire_pm25: 16, aire_calidad: 'Moderada', agua_acceso: 82, agua_estado: 'Bueno' },
+            { prov: 'Mendoza', aire_pm25: 10, aire_calidad: 'Buena', agua_acceso: 90, agua_estado: 'Crítico (Hídrico)' },
+            { prov: 'Misiones', aire_pm25: 5, aire_calidad: 'Muy Buena', agua_acceso: 70, agua_estado: 'Bueno' },
+            { prov: 'Chaco', aire_pm25: 8, aire_calidad: 'Buena', agua_acceso: 65, agua_estado: 'Déficit' },
+            { prov: 'Neuquén', aire_pm25: 6, aire_calidad: 'Muy Buena', agua_acceso: 92, agua_estado: 'Bueno' },
+        ];
+
+        const PLASTIC_WASTE_DATA = [
+            { name: 'Plásticos', value: 84, color: '#3B82F6' },
+            { name: 'Vidrio', value: 4, color: '#10B981' },
+            { name: 'Papel/Cartón', value: 3, color: '#F59E0B' },
+            { name: 'Metal', value: 2, color: '#6B7280' },
+            { name: 'Otros', value: 7, color: '#EF4444' },
+        ];
+
+        const PLASTIC_TYPES = [
+            { name: 'Botellas PET', value: 30 },
+            { name: 'Bolsas', value: 25 },
+            { name: 'Envoltorios', value: 20 },
+            { name: 'Redes Pesca', value: 10 },
+            { name: 'Tapitas', value: 15 },
+        ];
+
+        const FIRE_ALERTS = [
+            { lat: -27.4698, lng: -58.8306, intensity: 0.8, loc: 'Corrientes' },
+            { lat: -26.8083, lng: -65.2176, intensity: 0.4, loc: 'Tucumán' },
+            { lat: -32.9442, lng: -60.6505, intensity: 0.9, loc: 'Delta del Paraná' },
+            { lat: -31.4201, lng: -64.1888, intensity: 0.6, loc: 'Sierras de Córdoba' },
+        ];
+
+        // --- COMPONENTES UI ---
+
+        const Card = ({ title, children, className = "" }) => (
+            <div className={`bg-white p-6 rounded-xl shadow-sm border border-gray-100 ${className}`}>
+                <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                    {title}
+                </h3>
+                {children}
+            </div>
+        );
+
+        const Metric = ({ label, value, unit, trend, icon, color = "blue", onClick }) => (
+            <div 
+                onClick={onClick}
+                className={`p-4 rounded-lg bg-${color}-50 border border-${color}-100 flex items-center justify-between cursor-pointer hover:shadow-md transition-all`}
+            >
+                <div>
+                    <p className="text-sm text-gray-500 mb-1">{label}</p>
+                    <div className="flex items-end gap-2">
+                        <span className={`text-2xl font-bold text-${color}-700`}>{value}</span>
+                        <span className={`text-xs font-medium text-${color}-600 mb-1`}>{unit}</span>
+                    </div>
+                    {trend && <p className="text-xs text-gray-400 mt-1">{trend}</p>}
+                </div>
+                <div className={`text-${color}-500 text-3xl opacity-80`}>
+                    <i className={`fas ${icon}`}></i>
+                </div>
+            </div>
+        );
+
+        // Map Component updated to handle Energy markers
+        const SimpleMap = ({ markers, type }) => {
+            const mapRef = useRef(null);
+            
+            useEffect(() => {
+                if (!document.getElementById('map')) return;
+                
+                if (mapRef.current) {
+                    mapRef.current.remove();
+                    mapRef.current = null;
+                }
+
+                try {
+                    // Centro aprox. de Argentina o ajustado
+                    const center = type === 'energy' ? [-34.00, -64.00] : [-34.6037, -58.3816];
+                    const zoom = type === 'energy' ? 4 : 5;
+
+                    const map = L.map('map').setView(center, zoom);
+                    
+                    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                        attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+                    }).addTo(map);
+
+                    markers.forEach(m => {
+                        let color;
+                        let radius;
+                        let popupText;
+
+                        if (type === 'energy') {
+                            color = m.color || '#333';
+                            radius = 12000;
+                            popupText = `<b>${m.name}</b><br/>${m.type}`;
+                        } else {
+                            // Fire logic
+                            color = '#EF4444';
+                            radius = m.intensity * 20000;
+                            popupText = `${m.loc}: Alerta de Foco Ígneo`;
+                        }
+                        
+                        L.circle([m.lat, m.lng], {
+                            color: color,
+                            fillColor: color,
+                            fillOpacity: 0.7,
+                            radius: radius,
+                            stroke: false
+                        }).addTo(map).bindPopup(popupText);
+                    });
+
+                    mapRef.current = map;
+                } catch (e) { }
+
+                return () => { 
+                    if (mapRef.current) {
+                        mapRef.current.remove();
+                        mapRef.current = null;
+                    }
+                };
+            }, [markers, type]);
+
+            return <div id="map" className="map-container"></div>;
+        };
+
+        const SectionHeader = ({ icon, title, subtitle }) => (
+            <div className="mb-8 animate-fade-in">
+                <h2 className="text-3xl font-bold text-gray-800 flex items-center gap-3">
+                    <span className="bg-emerald-100 text-emerald-600 p-2 rounded-lg">
+                        <i className={`fas ${icon}`}></i>
+                    </span>
+                    {title}
+                </h2>
+                <p className="text-gray-500 mt-2 ml-14">{subtitle}</p>
+            </div>
+        );
+
+        // --- VISTAS ---
+
+        const HomeView = ({ navigateTo }) => (
+            <div className="animate-fade-in space-y-8">
+                {/* Intro Section */}
+                <div className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl p-8 text-white shadow-lg">
+                    <h1 className="text-4xl font-bold mb-4">Monitor Ambiental Argentino</h1>
+                    <p className="text-lg opacity-90 leading-relaxed max-w-4xl">
+                        Bienvenido a EcoData Argentina. Este dashboard interactivo centraliza indicadores ambientales críticos 
+                        de nuestro país, desde la matriz energética hasta la salud de nuestros océanos. 
+                        Su propósito es democratizar el acceso a datos complejos, permitiendo visualizar el impacto 
+                        de las políticas públicas y los desafíos climáticos actuales.
+                    </p>
+                    <div className="mt-6 flex flex-wrap gap-3">
+                        <span className="bg-white/20 px-3 py-1 rounded-full text-sm font-medium border border-white/30">
+                            <i className="fas fa-database mr-2"></i>Datos Abiertos
+                        </span>
+                        <span className="bg-white/20 px-3 py-1 rounded-full text-sm font-medium border border-white/30">
+                            <i className="fas fa-globe-americas mr-2"></i>Cobertura Federal
+                        </span>
+                        <span className="bg-white/20 px-3 py-1 rounded-full text-sm font-medium border border-white/30">
+                            <i className="fas fa-chart-line mr-2"></i>Análisis en Tiempo Real
+                        </span>
+                    </div>
+                </div>
+
+                {/* KPI Summary - Direct access to sections */}
+                <div>
+                    <h3 className="text-xl font-bold text-gray-700 mb-4 px-2 border-l-4 border-emerald-500">Resumen de Indicadores Clave</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <Metric 
+                            label="Renovables (Matriz)" 
+                            value="18.2" unit="%" 
+                            trend="Tendencia Positiva" 
+                            icon="fa-solar-panel" 
+                            color="emerald"
+                            onClick={() => navigateTo('energy')}
+                        />
+                        <Metric 
+                            label="Alertas de Fuego" 
+                            value="124" unit="Focos" 
+                            trend="Últimas 24hs" 
+                            icon="fa-fire" 
+                            color="red"
+                            onClick={() => navigateTo('forest')}
+                        />
+                        <Metric 
+                            label="Residuo Plástico" 
+                            value="84.5" unit="%" 
+                            trend="En Costas" 
+                            icon="fa-bottle-water" 
+                            color="blue"
+                            onClick={() => navigateTo('plastic')}
+                        />
+                        <Metric 
+                            label="Aire Crítico" 
+                            value="3" unit="Prov." 
+                            trend="PM2.5 > OMS" 
+                            icon="fa-wind" 
+                            color="gray"
+                            onClick={() => navigateTo('table')}
+                        />
+                    </div>
+                </div>
+
+                {/* Quick Chart Preview */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <Card title="Evolución Rápida: Energías Limpias">
+                        <ResponsiveContainer width="100%" height={250}>
+                             <AreaChart data={RENEWABLE_HISTORY}>
+                                <defs>
+                                    <linearGradient id="colorHome" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#10B981" stopOpacity={0.8}/>
+                                        <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
+                                    </linearGradient>
+                                </defs>
+                                <XAxis dataKey="year" hide />
+                                <YAxis hide />
+                                <Tooltip />
+                                <Area type="monotone" dataKey="Eolica" stroke="#10B981" fill="url(#colorHome)" />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                        <p className="text-sm text-gray-500 mt-2 text-center">Crecimiento sostenido de capacidad instalada eólica y solar (2019-2023).</p>
+                    </Card>
+
+                    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex flex-col justify-center">
+                        <h3 className="text-lg font-semibold text-gray-800 mb-4">¿Qué descubrirás aquí?</h3>
+                        <ul className="space-y-4">
+                            <li className="flex items-start gap-3">
+                                <span className="bg-blue-100 text-blue-600 rounded-full p-1 text-xs mt-1"><i className="fas fa-check"></i></span>
+                                <span className="text-gray-600 text-sm">Comparativas interprovinciales de acceso a agua y calidad del aire.</span>
+                            </li>
+                            <li className="flex items-start gap-3">
+                                <span className="bg-blue-100 text-blue-600 rounded-full p-1 text-xs mt-1"><i className="fas fa-check"></i></span>
+                                <span className="text-gray-600 text-sm">Mapas de calor de focos de incendio activos en tiempo real.</span>
+                            </li>
+                            <li className="flex items-start gap-3">
+                                <span className="bg-blue-100 text-blue-600 rounded-full p-1 text-xs mt-1"><i className="fas fa-check"></i></span>
+                                <span className="text-gray-600 text-sm">Composición detallada de la basura marina en nuestras costas.</span>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const EnergyView = () => (
+            <div className="animate-fade-in">
+                <SectionHeader 
+                    icon="fa-bolt" 
+                    title="Matriz Energética y Transición" 
+                    subtitle="Monitoreo de la generación eléctrica y el avance de la Ley 27.191 de Energías Renovables."
+                />
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                    <Metric label="Generación Renovable" value="18.2" unit="%" trend="+2.1%" icon="fa-solar-panel" color="emerald" />
+                    <Metric label="Demanda Cubierta" value="14,500" unit="MW" trend="Estable" icon="fa-plug" color="blue" />
+                    <Metric label="Emisiones CO2e" value="280" unit="g/kWh" trend="-5%" icon="fa-smog" color="gray" />
+                </div>
+
+                {/* Mapa de Distribución Energética - NUEVA SECCIÓN */}
+                <div className="mb-6">
+                    <Card title="Distribución de Infraestructura Energética">
+                        <div className="flex gap-4 mb-3 flex-wrap text-sm">
+                            <div className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-blue-500"></span> Hidroeléctrica</div>
+                            <div className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-purple-500"></span> Nuclear</div>
+                            <div className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-yellow-500"></span> Solar</div>
+                            <div className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-emerald-500"></span> Eólica</div>
+                            <div className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-red-500"></span> Térmica</div>
+                        </div>
+                        <SimpleMap markers={ENERGY_SITES} type="energy" />
+                    </Card>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <Card title="Mix Energético Actual (2024)">
+                        <ResponsiveContainer width="100%" height={300}>
+                            <PieChart>
+                                <Pie 
+                                    data={ENERGY_DATA} 
+                                    cx="50%" cy="50%" 
+                                    innerRadius={60} 
+                                    outerRadius={100} 
+                                    paddingAngle={5} 
+                                    dataKey="value"
+                                >
+                                    {ENERGY_DATA.map((entry, index) => (
+                                        <Cell key={`cell-${index}`} fill={entry.color} />
+                                    ))}
+                                </Pie>
+                                <Tooltip />
+                                <Legend />
+                            </PieChart>
+                        </ResponsiveContainer>
+                    </Card>
+                    <Card title="Evolución Renovable (GWh)">
+                        <ResponsiveContainer width="100%" height={300}>
+                            <AreaChart data={RENEWABLE_HISTORY} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                                <defs>
+                                    <linearGradient id="colorEolica" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#10B981" stopOpacity={0.8}/>
+                                        <stop offset="95%" stopColor="#10B981" stopOpacity={0}/>
+                                    </linearGradient>
+                                </defs>
+                                <XAxis dataKey="year" />
+                                <YAxis />
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                <Tooltip />
+                                <Area type="monotone" dataKey="Eolica" stackId="1" stroke="#10B981" fill="url(#colorEolica)" />
+                                <Area type="monotone" dataKey="Solar" stackId="1" stroke="#F59E0B" fill="#F59E0B" />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    </Card>
+                </div>
+            </div>
+        );
+
+        const ForestView = () => (
+            <div className="animate-fade-in">
+                <SectionHeader 
+                    icon="fa-tree" 
+                    title="Bosques Nativos y Uso del Suelo" 
+                    subtitle="Alertas de deforestación y focos de calor en tiempo real (Gran Chaco y Selvas)."
+                />
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                    <Metric label="Alertas de Incendio (24hs)" value="124" unit="Focos" icon="fa-fire" color="red" />
+                    <Metric label="Pérdida Arbórea (2023)" value="190k" unit="Hectáreas" icon="fa-chart-area" color="orange" />
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <Card title="Mapa de Calor e Incendios" className="lg:col-span-2">
+                         <div className="mb-2 text-sm text-gray-500 bg-yellow-50 p-2 rounded border border-yellow-100">
+                            <i className="fas fa-satellite mr-2"></i>
+                            Datos simulados basados en FIRMS (NASA). Círculos rojos indican focos activos.
+                        </div>
+                        <SimpleMap markers={FIRE_ALERTS} type="fire" />
+                    </Card>
+                    <Card title="Causas de Deforestación">
+                        <ul className="space-y-4">
+                            <li className="flex justify-between items-center p-3 bg-gray-50 rounded">
+                                <span><i className="fas fa-tractor text-yellow-600 mr-2"></i>Expansión Agrícola</span>
+                                <span className="font-bold">45%</span>
+                            </li>
+                             <li className="flex justify-between items-center p-3 bg-gray-50 rounded">
+                                <span><i className="fas fa-cow text-orange-600 mr-2"></i>Ganadería</span>
+                                <span className="font-bold">38%</span>
+                            </li>
+                             <li className="flex justify-between items-center p-3 bg-gray-50 rounded">
+                                <span><i className="fas fa-fire text-red-600 mr-2"></i>Incendios</span>
+                                <span className="font-bold">12%</span>
+                            </li>
+                             <li className="flex justify-between items-center p-3 bg-gray-50 rounded">
+                                <span><i className="fas fa-city text-gray-600 mr-2"></i>Urbanización</span>
+                                <span className="font-bold">5%</span>
+                            </li>
+                        </ul>
+                    </Card>
+                </div>
+            </div>
+        );
+
+        const PlasticView = () => (
+             <div className="animate-fade-in">
+                <SectionHeader 
+                    icon="fa-water" 
+                    title="Océanos y Contaminación Plástica" 
+                    subtitle="Datos del Censo Provincial de Basura Costera Marina en playas bonaerenses."
+                />
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                     <Metric label="% Residuos Plásticos" value="84.5" unit="%" icon="fa-bottle-water" color="blue" />
+                     <Metric label="Residuos x Metro" value="1.2" unit="Items/m" icon="fa-trash-arrow-up" color="cyan" />
+                     <Metric label="Fauna Afectada" value="Alta" unit="Impacto" icon="fa-otter" color="red" />
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <Card title="Composición de Residuos en Playas">
+                        <ResponsiveContainer width="100%" height={300}>
+                            <PieChart>
+                                <Pie 
+                                    data={PLASTIC_WASTE_DATA} 
+                                    cx="50%" cy="50%" 
+                                    innerRadius={0} 
+                                    outerRadius={100} 
+                                    dataKey="value"
+                                    label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                >
+                                    {PLASTIC_WASTE_DATA.map((entry, index) => (
+                                        <Cell key={`cell-${index}`} fill={entry.color} />
+                                    ))}
+                                </Pie>
+                                <Tooltip />
+                            </PieChart>
+                        </ResponsiveContainer>
+                        <p className="text-xs text-center text-gray-400 mt-2">Fuente: Censo Basura Costera (Vida Silvestre)</p>
+                    </Card>
+
+                    <Card title="Top 5 Plásticos Hallados">
+                         <ResponsiveContainer width="100%" height={300}>
+                            <BarChart data={PLASTIC_TYPES} layout="vertical" margin={{top: 5, right: 30, left: 40, bottom: 5}}>
+                                <XAxis type="number" />
+                                <YAxis type="category" dataKey="name" width={100} />
+                                <Tooltip />
+                                <Bar dataKey="value" fill="#3B82F6" radius={[0, 4, 4, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </Card>
+                </div>
+            </div>
+        );
+
+        const TableView = () => (
+             <div className="animate-fade-in">
+                <SectionHeader 
+                    icon="fa-table" 
+                    title="Datos por Provincia: Aire y Agua" 
+                    subtitle="Comparativa federal de calidad de aire (PM2.5 Satelital) y acceso a agua segura (Censo 2022)."
+                />
+                
+                <Card title="Monitor Federal Ambiental">
+                    <div className="overflow-x-auto custom-scroll">
+                        <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                                <tr>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Provincia</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aire PM2.5 (µg/m³)</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Calidad Aire</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Acceso Agua Red</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Estado Hídrico</th>
+                                </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                                {PROVINCIAL_ENV_DATA.map((row, idx) => (
+                                    <tr key={idx} className="hover:bg-gray-50">
+                                        <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">{row.prov}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-gray-600">{row.aire_pm25}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap">
+                                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                                ${row.aire_calidad === 'Buena' || row.aire_calidad === 'Muy Buena' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                                                {row.aire_calidad}
+                                            </span>
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-gray-600">
+                                            <div className="flex items-center">
+                                                <span className="mr-2">{row.agua_acceso}%</span>
+                                                <div className="w-16 bg-gray-200 rounded-full h-1.5">
+                                                    <div className="bg-blue-500 h-1.5 rounded-full" style={{width: `${row.agua_acceso}%`}}></div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{row.agua_estado}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </Card>
+            </div>
+        );
+
+        const ConclusionsView = () => (
+             <div className="animate-fade-in">
+                <SectionHeader 
+                    icon="fa-clipboard-check" 
+                    title="Conclusiones e Insights" 
+                    subtitle="Principales hallazgos basados en la evidencia recolectada."
+                />
+
+                <div className="space-y-6">
+                    {/* Insight 1: Energia */}
+                    <div className="bg-white rounded-xl shadow-sm border-l-4 border-emerald-500 p-6">
+                        <div className="flex items-start gap-4">
+                            <div className="bg-emerald-100 text-emerald-600 p-3 rounded-full shrink-0">
+                                <i className="fas fa-bolt"></i>
+                            </div>
+                            <div>
+                                <h3 className="text-lg font-bold text-gray-800">Transición Energética en Marcha</h3>
+                                <p className="text-gray-600 mt-2 leading-relaxed">
+                                    Si bien las energías renovables han crecido sostenidamente alcanzando el <strong>18.2%</strong>, 
+                                    la matriz sigue dependiendo fuertemente de fuentes térmicas (45%). La infraestructura de transporte eléctrico 
+                                    es el próximo cuello de botella a resolver para permitir una mayor penetración eólica y solar.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Insight 2: Plásticos */}
+                    <div className="bg-white rounded-xl shadow-sm border-l-4 border-blue-500 p-6">
+                        <div className="flex items-start gap-4">
+                            <div className="bg-blue-100 text-blue-600 p-3 rounded-full shrink-0">
+                                <i className="fas fa-water"></i>
+                            </div>
+                            <div>
+                                <h3 className="text-lg font-bold text-gray-800">Crisis de Plásticos en el Mar Argentino</h3>
+                                <p className="text-gray-600 mt-2 leading-relaxed">
+                                    Los datos de censos costeros son alarmantes: más del <strong>80%</strong> de los residuos hallados son plásticos. 
+                                    Esto impacta directamente en la fauna marina, con un 90% de tortugas afectadas por ingesta. Se requiere urgentemente 
+                                    una ley de envases y mejor gestión de residuos urbanos costeros.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Insight 3: Bosques */}
+                    <div className="bg-white rounded-xl shadow-sm border-l-4 border-red-500 p-6">
+                        <div className="flex items-start gap-4">
+                            <div className="bg-red-100 text-red-600 p-3 rounded-full shrink-0">
+                                <i className="fas fa-tree"></i>
+                            </div>
+                            <div>
+                                <h3 className="text-lg font-bold text-gray-800">Deforestación en el Gran Chaco</h3>
+                                <p className="text-gray-600 mt-2 leading-relaxed">
+                                    La expansión de la frontera agrícola sigue siendo el principal motor de pérdida de bosque nativo. 
+                                    El sistema de alertas tempranas (SAT) muestra focos persistentes que, combinados con sequías, 
+                                    generan un riesgo extremo de incendios incontrolables.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+
+        // --- APP PRINCIPAL ---
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('home');
+
+            const renderContent = () => {
+                switch(activeTab) {
+                    case 'home': return <HomeView navigateTo={setActiveTab} />;
+                    case 'energy': return <EnergyView />;
+                    case 'forest': return <ForestView />;
+                    case 'plastic': return <PlasticView />;
+                    case 'table': return <TableView />;
+                    case 'conclusions': return <ConclusionsView />;
+                    default: return <HomeView navigateTo={setActiveTab} />;
+                }
+            };
+
+            const NavBtn = ({ id, icon, label, isSubItem = false }) => (
+                <button 
+                    onClick={() => setActiveTab(id)}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors mb-1 text-sm
+                        ${isSubItem ? 'pl-8 text-sm' : 'font-medium'}
+                        ${activeTab === id ? 'bg-emerald-600 text-white shadow-md' : 'text-gray-600 hover:bg-emerald-50 hover:text-emerald-700'}`}
+                >
+                    <i className={`fas ${icon} w-5 text-center ${isSubItem ? 'text-xs opacity-70' : ''}`}></i>
+                    <span>{label}</span>
+                </button>
+            );
+
+            return (
+                <div className="flex flex-col md:flex-row min-h-screen bg-gray-50">
+                    {/* Sidebar */}
+                    <aside className="w-full md:w-64 bg-white border-r border-gray-200 flex-shrink-0 z-10 shadow-lg md:shadow-none flex flex-col h-screen sticky top-0">
+                        <div className="p-6 border-b border-gray-100">
+                            <h1 className="text-2xl font-bold text-emerald-700 flex items-center gap-2">
+                                <i className="fas fa-leaf"></i> EcoData AR
+                            </h1>
+                        </div>
+                        
+                        <nav className="p-4 flex-1 overflow-y-auto">
+                            <p className="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 mt-2">Principal</p>
+                            <NavBtn id="home" icon="fa-home" label="Resumen General" />
+                            
+                            <p className="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 mt-6">Exploración de Datos</p>
+                            <NavBtn id="energy" icon="fa-bolt" label="Energía" isSubItem />
+                            <NavBtn id="forest" icon="fa-tree" label="Bosques y Fuego" isSubItem />
+                            <NavBtn id="plastic" icon="fa-bottle-water" label="Océanos" isSubItem />
+                            <NavBtn id="table" icon="fa-table" label="Datos Provinciales" isSubItem />
+
+                            <p className="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 mt-6">Análisis</p>
+                            <NavBtn id="conclusions" icon="fa-clipboard-check" label="Conclusiones" />
+                        </nav>
+                        
+                        <div className="p-6 border-t border-gray-100 bg-gray-50">
+                            <p className="text-xs text-center text-gray-500">
+                                Datos actualizados a <br/><strong>Noviembre 2024</strong>
+                            </p>
+                        </div>
+                    </aside>
+
+                    {/* Main Content */}
+                    <main className="flex-1 p-4 md:p-8 overflow-y-auto h-screen">
+                        <div className="max-w-6xl mx-auto pb-10">
+                            {renderContent()}
+                        </div>
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
